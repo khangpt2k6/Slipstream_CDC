@@ -10,11 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -160,11 +161,15 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 	s.proxy(http.MethodPost, "/v1/edges")(w, r)
 }
 
+// proxyParams are the only query parameters forwarded to the directory.
+var proxyParams = []string{"q", "limit", "from", "to", "email"}
+
 func (s *Server) proxy(method, path string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		target := strings.TrimRight(s.DirectoryURL, "/") + path
-		if r.URL.RawQuery != "" {
-			target += "?" + r.URL.RawQuery
+		target, err := s.directoryURL(path, r.URL.Query())
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err)
+			return
 		}
 		var body io.Reader
 		if method == http.MethodPost {
@@ -181,7 +186,7 @@ func (s *Server) proxy(method, path string) http.HandlerFunc {
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
-		resp, err := s.HTTP.Do(req)
+		resp, err := s.HTTP.Do(req) // #nosec G704 -- scheme and host come from config; only whitelisted query params are forwarded
 		if err != nil {
 			httpError(w, http.StatusBadGateway, err)
 			return
@@ -193,12 +198,33 @@ func (s *Server) proxy(method, path string) http.HandlerFunc {
 	}
 }
 
+// directoryURL builds a directory URL from the configured base, a fixed
+// path, and only the whitelisted query parameters.
+func (s *Server) directoryURL(path string, in url.Values) (string, error) {
+	u, err := url.Parse(strings.TrimRight(s.DirectoryURL, "/") + path)
+	if err != nil {
+		return "", err
+	}
+	q := url.Values{}
+	for _, k := range proxyParams {
+		if v := in.Get(k); v != "" {
+			q.Set(k, v)
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
 func (s *Server) getJSON(ctx context.Context, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.DirectoryURL, "/")+path, nil)
+	target, err := s.directoryURL(path, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := s.HTTP.Do(req)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := s.HTTP.Do(req) // #nosec G704 -- scheme and host come from config
 	if err != nil {
 		return err
 	}
@@ -249,12 +275,17 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // spa serves the built UI, falling back to index.html for client routes.
+// os.DirFS rejects paths that escape dir.
 func spa(dir string) http.Handler {
-	files := http.FileServer(http.Dir(dir))
+	fsys := os.DirFS(dir)
+	files := http.FileServerFS(fsys)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := filepath.Join(dir, filepath.FromSlash(filepath.Clean("/"+r.URL.Path)))
-		if st, err := os.Stat(p); err != nil || st.IsDir() && r.URL.Path != "/" {
-			http.ServeFile(w, r, filepath.Join(dir, "index.html"))
+		name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		if name == "" {
+			name = "index.html"
+		}
+		if st, err := fs.Stat(fsys, name); err != nil || st.IsDir() {
+			http.ServeFileFS(w, r, fsys, "index.html")
 			return
 		}
 		files.ServeHTTP(w, r)

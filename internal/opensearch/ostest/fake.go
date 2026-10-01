@@ -24,11 +24,11 @@ type Doc struct {
 type Server struct {
 	*httptest.Server
 
-	mu     sync.Mutex
-	docs   map[string]*Doc
-	seq    int64
-	BeforeBulk func() // optional hook run before each bulk is applied
-	FailNextBulk int  // respond 503 to this many bulk requests
+	mu           sync.Mutex
+	docs         map[string]*Doc
+	seq          int64
+	BeforeBulk   func() // optional hook run before each bulk is applied
+	FailNextBulk int    // respond 503 to this many bulk requests
 }
 
 // New starts a fake server. Close it when done.

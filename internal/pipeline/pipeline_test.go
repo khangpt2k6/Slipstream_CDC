@@ -94,7 +94,9 @@ func decode(r *kgo.Record) (Item, error) {
 	return Item{Key: v, Rec: r}, nil
 }
 
-func rec(v string) *kgo.Record { return &kgo.Record{Topic: "ss.docs", Key: []byte(v), Value: []byte(v)} }
+func rec(v string) *kgo.Record {
+	return &kgo.Record{Topic: "ss.docs", Key: []byte(v), Value: []byte(v)}
+}
 
 func recs(vs ...string) []*kgo.Record {
 	out := make([]*kgo.Record, len(vs))
