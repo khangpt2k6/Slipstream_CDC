@@ -118,3 +118,22 @@ func (e *Env) Bool(key string, def bool) bool {
 	}
 	return v
 }
+
+// Rate returns key as a non-negative float (a rate or a size), or def when
+// unset. Zero is allowed and usually means "off".
+func (e *Env) Rate(key string, def float64) float64 {
+	raw := strings.TrimSpace(e.get(key))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s: %w", key, err))
+		return def
+	}
+	if v < 0 {
+		e.errs = append(e.errs, fmt.Errorf("%s must not be negative, got %v", key, v))
+		return def
+	}
+	return v
+}
