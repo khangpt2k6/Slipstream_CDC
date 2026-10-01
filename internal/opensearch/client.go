@@ -110,6 +110,11 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 func (c *Client) EnsureIndex(ctx context.Context, alias, index string, body map[string]any) error {
 	err := c.Do(ctx, http.MethodHead, "/"+url.PathEscape(alias), nil, nil)
 	if err == nil {
+		// Already there: apply additive mapping changes (new fields). Changing
+		// an existing field's type fails here and needs a re-index instead.
+		if m, ok := body["mappings"].(map[string]any); ok {
+			return c.Do(ctx, http.MethodPut, "/"+url.PathEscape(alias)+"/_mapping", m, nil)
+		}
 		return nil
 	}
 	if !IsStatus(err, http.StatusNotFound) {

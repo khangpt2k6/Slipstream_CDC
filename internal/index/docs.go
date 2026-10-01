@@ -163,6 +163,7 @@ func docFields(e model.DocEvent, hash string) map[string]any {
 		"content_hash": hash,
 		"src_ts_ms":    e.SrcTsMs,
 		"emit_ts_ms":   e.EmitTsMs,
+		"mode":         string(e.Mode),
 	}
 	if !d.CreatedAt.IsZero() {
 		f["created_at"] = d.CreatedAt.UTC().Format(time.RFC3339Nano)

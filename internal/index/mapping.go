@@ -55,6 +55,7 @@ func Mapping(dims int, refresh string) map[string]any {
 				"allowed":           keyword,
 				"version":           long,
 				"src_ts_ms":         long,
+				"mode":              keyword,
 				"emit_ts_ms":        long,
 				"indexed_at_ms":     long,
 				"content_hash":      keyword,

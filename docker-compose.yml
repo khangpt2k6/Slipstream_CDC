@@ -142,7 +142,48 @@ services:
     container_name: ss-indexer2
     build: !reset null
 
+  # Simulated identity provider: users, teams, grants. Source of truth for
+  # permissions and the leak oracle.
+  directory:
+    <<: *ss
+    container_name: ss-directory
+    command: ["directory"]
+    depends_on:
+      kafka: { condition: service_healthy }
+    environment:
+      <<: *ss-env
+      SS_DIRECTORY_DB: /data/directory.db
+    ports:
+      - "8081:8081"
+    volumes:
+      - directory-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *ss
+    container_name: ss-api
+    command: ["api"]
+    depends_on:
+      redis: { condition: service_healthy }
+      opensearch: { condition: service_healthy }
+      directory: { condition: service_healthy }
+    environment:
+      <<: *ss-env
+      SS_DIRECTORY_URL: http://directory:8081
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
 volumes:
+  directory-data:
   kafka-data:
   redis-data:
   opensearch-data:
