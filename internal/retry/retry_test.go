@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khangpt2k6/CDC/internal/retry"
+	"github.com/khangpt2k6/Slipstream_CDC/internal/retry"
 )
 
 // fastCfg keeps delays sub-millisecond so the tests run instantly.

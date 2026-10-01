@@ -1,93 +1,46 @@
-// Package config loads worker configuration from the environment.
+// Package config reads service configuration from SS_* environment variables.
+//
+// Every Slipstream binary declares its own config struct and fills it through
+// an Env, so each service documents exactly the variables it reads, every value
+// has a built-in default, and a malformed value is reported once at startup
+// instead of surfacing as a confusing runtime failure.
 package config
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// Config holds everything the worker needs to connect its Kafka source to its
-// ClickHouse sink. Every field comes from a CDC_* environment variable, with
-// the defaults applied by Load.
-type Config struct {
-	KafkaBrokers          []string      // CDC_KAFKA_BROKERS (comma-separated host:port)
-	KafkaGroup            string        // CDC_KAFKA_GROUP (consumer group id)
-	KafkaTopics           []string      // CDC_KAFKA_TOPICS (comma-separated topics)
-	ClickHouseDSN         string        // CDC_CLICKHOUSE_DSN
-	ClickHouseDialTimeout time.Duration // CDC_CLICKHOUSE_DIAL_TIMEOUT (bound the connect)
-	ClickHouseReadTimeout time.Duration // CDC_CLICKHOUSE_READ_TIMEOUT (bound a stalled read/write)
-	BatchSize             int           // CDC_BATCH_SIZE (rows per flush)
-	FlushInterval         time.Duration // CDC_FLUSH_INTERVAL (max time between flushes)
-	RetryBase             time.Duration // CDC_RETRY_BASE (first flush-retry backoff)
-	RetryMax              time.Duration // CDC_RETRY_MAX (flush-retry backoff cap)
-	LagInterval           time.Duration // CDC_LAG_INTERVAL (how often to sample consumer lag)
-	MetricsAddr           string        // CDC_METRICS_ADDR (host:port serving /metrics)
-	DLQTopicSuffix        string        // CDC_DLQ_TOPIC_SUFFIX (appended to a source topic to form its dead-letter topic)
-	LogLevel              string        // CDC_LOG_LEVEL (debug|info|warn|error)
+// Env reads typed values from an os.Getenv-style lookup, applying defaults and
+// collecting parse errors. Read every field first, then check Err once.
+type Env struct {
+	get  func(string) string
+	errs []error
 }
 
-// Load builds a Config from getenv, applying a default for any variable that
-// getenv returns empty. getenv has os.Getenv semantics (empty string when
-// unset); injecting it keeps Load testable without touching the real
-// environment. It returns an error when a numeric or duration value is
-// malformed or out of range.
-func Load(getenv func(string) string) (Config, error) {
-	cfg := Config{
-		KafkaBrokers:   splitList(get(getenv, "CDC_KAFKA_BROKERS", "localhost:29092")),
-		KafkaGroup:     get(getenv, "CDC_KAFKA_GROUP", "cdc-clickhouse-sink"),
-		KafkaTopics:    splitList(get(getenv, "CDC_KAFKA_TOPICS", "cdc.public.customers,cdc.public.orders")),
-		ClickHouseDSN:  get(getenv, "CDC_CLICKHOUSE_DSN", "clickhouse://default:@localhost:9000/cdc"),
-		MetricsAddr:    get(getenv, "CDC_METRICS_ADDR", ":9100"),
-		DLQTopicSuffix: get(getenv, "CDC_DLQ_TOPIC_SUFFIX", ".dlq"),
-		LogLevel:       get(getenv, "CDC_LOG_LEVEL", "info"),
-	}
+// New returns an Env over getenv (os.Getenv semantics: "" when unset).
+// Injecting it keeps config loading testable without touching the process
+// environment.
+func New(getenv func(string) string) *Env { return &Env{get: getenv} }
 
-	batch, err := strconv.Atoi(get(getenv, "CDC_BATCH_SIZE", "1000"))
-	if err != nil {
-		return Config{}, fmt.Errorf("CDC_BATCH_SIZE: %w", err)
-	}
-	if batch <= 0 {
-		return Config{}, fmt.Errorf("CDC_BATCH_SIZE must be positive, got %d", batch)
-	}
-	cfg.BatchSize = batch
+// Err reports every malformed or out-of-range value seen so far, joined.
+func (e *Env) Err() error { return errors.Join(e.errs...) }
 
-	for _, d := range []struct {
-		key, def string
-		dst      *time.Duration
-	}{
-		{"CDC_FLUSH_INTERVAL", "1s", &cfg.FlushInterval},
-		{"CDC_RETRY_BASE", "1s", &cfg.RetryBase},
-		{"CDC_RETRY_MAX", "30s", &cfg.RetryMax},
-		{"CDC_LAG_INTERVAL", "5s", &cfg.LagInterval},
-		{"CDC_CLICKHOUSE_DIAL_TIMEOUT", "5s", &cfg.ClickHouseDialTimeout},
-		{"CDC_CLICKHOUSE_READ_TIMEOUT", "30s", &cfg.ClickHouseReadTimeout},
-	} {
-		v, err := time.ParseDuration(get(getenv, d.key, d.def))
-		if err != nil {
-			return Config{}, fmt.Errorf("%s: %w", d.key, err)
-		}
-		if v <= 0 {
-			return Config{}, fmt.Errorf("%s must be positive, got %s", d.key, v)
-		}
-		*d.dst = v
-	}
-
-	return cfg, nil
-}
-
-// get returns getenv(key), or def when the variable is empty or unset.
-func get(getenv func(string) string, key, def string) string {
-	if v := getenv(key); v != "" {
+// String returns key's value, or def when it is unset or empty.
+func (e *Env) String(key, def string) string {
+	if v := strings.TrimSpace(e.get(key)); v != "" {
 		return v
 	}
 	return def
 }
 
-// splitList splits a comma-separated list, trimming spaces and dropping empties.
-func splitList(s string) []string {
-	parts := strings.Split(s, ",")
+// List splits key's comma-separated value, trimming spaces and dropping
+// empties. def uses the same format.
+func (e *Env) List(key, def string) []string {
+	parts := strings.Split(e.String(key, def), ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
 		if p = strings.TrimSpace(p); p != "" {
@@ -95,4 +48,73 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// Int returns key as a positive integer, or def when unset.
+func (e *Env) Int(key string, def int) int {
+	raw := e.get(key)
+	if strings.TrimSpace(raw) == "" {
+		return def
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s: %w", key, err))
+		return def
+	}
+	if v <= 0 {
+		e.errs = append(e.errs, fmt.Errorf("%s must be positive, got %d", key, v))
+		return def
+	}
+	return v
+}
+
+// Float returns key as a float in [0, 1], or def when unset. It is used for
+// probabilities and ratios.
+func (e *Env) Float(key string, def float64) float64 {
+	raw := strings.TrimSpace(e.get(key))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s: %w", key, err))
+		return def
+	}
+	if v < 0 || v > 1 {
+		e.errs = append(e.errs, fmt.Errorf("%s must be within [0,1], got %v", key, v))
+		return def
+	}
+	return v
+}
+
+// Duration returns key as a positive time.Duration, or def when unset.
+func (e *Env) Duration(key string, def time.Duration) time.Duration {
+	raw := strings.TrimSpace(e.get(key))
+	if raw == "" {
+		return def
+	}
+	v, err := time.ParseDuration(raw)
+	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s: %w", key, err))
+		return def
+	}
+	if v <= 0 {
+		e.errs = append(e.errs, fmt.Errorf("%s must be positive, got %s", key, v))
+		return def
+	}
+	return v
+}
+
+// Bool returns key parsed by strconv.ParseBool, or def when unset.
+func (e *Env) Bool(key string, def bool) bool {
+	raw := strings.TrimSpace(e.get(key))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s: %w", key, err))
+		return def
+	}
+	return v
 }

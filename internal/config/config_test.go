@@ -2,134 +2,96 @@ package config_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/khangpt2k6/CDC/internal/config"
+	"github.com/khangpt2k6/Slipstream_CDC/internal/config"
 )
 
-// noEnv simulates a process with no CDC_* variables set.
-func noEnv(string) string { return "" }
+func envOf(m map[string]string) func(string) string {
+	return func(k string) string { return m[k] }
+}
 
-func TestLoadDefaults(t *testing.T) {
-	cfg, err := config.Load(noEnv)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
+func TestDefaultsWhenUnset(t *testing.T) {
+	e := config.New(envOf(nil))
 
-	want := config.Config{
-		KafkaBrokers:          []string{"localhost:29092"},
-		KafkaGroup:            "cdc-clickhouse-sink",
-		KafkaTopics:           []string{"cdc.public.customers", "cdc.public.orders"},
-		ClickHouseDSN:         "clickhouse://default:@localhost:9000/cdc",
-		ClickHouseDialTimeout: 5 * time.Second,
-		ClickHouseReadTimeout: 30 * time.Second,
-		BatchSize:             1000,
-		FlushInterval:         time.Second,
-		RetryBase:             time.Second,
-		RetryMax:              30 * time.Second,
-		LagInterval:           5 * time.Second,
-		MetricsAddr:           ":9100",
-		DLQTopicSuffix:        ".dlq",
-		LogLevel:              "info",
+	if got := e.String("SS_A", "x"); got != "x" {
+		t.Errorf("String = %q, want default x", got)
 	}
-	if !reflect.DeepEqual(cfg, want) {
-		t.Errorf("Load() defaults =\n  %+v\nwant\n  %+v", cfg, want)
+	if got := e.List("SS_B", "a, b,,c"); !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
+		t.Errorf("List = %v, want [a b c]", got)
+	}
+	if got := e.Int("SS_C", 7); got != 7 {
+		t.Errorf("Int = %d, want 7", got)
+	}
+	if got := e.Duration("SS_D", time.Second); got != time.Second {
+		t.Errorf("Duration = %v, want 1s", got)
+	}
+	if got := e.Bool("SS_E", true); !got {
+		t.Error("Bool = false, want default true")
+	}
+	if got := e.Float("SS_F", 0.25); got != 0.25 {
+		t.Errorf("Float = %v, want 0.25", got)
+	}
+	if err := e.Err(); err != nil {
+		t.Fatalf("Err = %v, want nil", err)
 	}
 }
 
-func TestLoadOverrides(t *testing.T) {
-	env := map[string]string{
-		"CDC_KAFKA_BROKERS":           "broker1:9092,broker2:9092",
-		"CDC_KAFKA_GROUP":             "g1",
-		"CDC_KAFKA_TOPICS":            "t1,t2",
-		"CDC_CLICKHOUSE_DSN":          "clickhouse://h:9000/db",
-		"CDC_BATCH_SIZE":              "500",
-		"CDC_FLUSH_INTERVAL":          "250ms",
-		"CDC_RETRY_BASE":              "2s",
-		"CDC_RETRY_MAX":               "1m",
-		"CDC_LAG_INTERVAL":            "10s",
-		"CDC_CLICKHOUSE_DIAL_TIMEOUT": "3s",
-		"CDC_CLICKHOUSE_READ_TIMEOUT": "45s",
-		"CDC_METRICS_ADDR":            ":1234",
-		"CDC_DLQ_TOPIC_SUFFIX":        ".deadletter",
-		"CDC_LOG_LEVEL":               "debug",
+func TestOverrides(t *testing.T) {
+	e := config.New(envOf(map[string]string{
+		"SS_A": " kafka:9092 ",
+		"SS_C": "42",
+		"SS_D": "250ms",
+		"SS_E": "false",
+		"SS_F": "0.5",
+	}))
+	if got := e.String("SS_A", ""); got != "kafka:9092" {
+		t.Errorf("String = %q, want trimmed kafka:9092", got)
 	}
-	cfg, err := config.Load(func(k string) string { return env[k] })
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+	if got := e.Int("SS_C", 1); got != 42 {
+		t.Errorf("Int = %d, want 42", got)
 	}
-
-	if !reflect.DeepEqual(cfg.KafkaBrokers, []string{"broker1:9092", "broker2:9092"}) {
-		t.Errorf("KafkaBrokers = %v", cfg.KafkaBrokers)
+	if got := e.Duration("SS_D", time.Hour); got != 250*time.Millisecond {
+		t.Errorf("Duration = %v, want 250ms", got)
 	}
-	if !reflect.DeepEqual(cfg.KafkaTopics, []string{"t1", "t2"}) {
-		t.Errorf("KafkaTopics = %v", cfg.KafkaTopics)
+	if got := e.Bool("SS_E", true); got {
+		t.Error("Bool = true, want false")
 	}
-	if cfg.KafkaGroup != "g1" {
-		t.Errorf("KafkaGroup = %q, want g1", cfg.KafkaGroup)
+	if got := e.Float("SS_F", 0); got != 0.5 {
+		t.Errorf("Float = %v, want 0.5", got)
 	}
-	if cfg.BatchSize != 500 {
-		t.Errorf("BatchSize = %d, want 500", cfg.BatchSize)
-	}
-	if cfg.FlushInterval != 250*time.Millisecond {
-		t.Errorf("FlushInterval = %v, want 250ms", cfg.FlushInterval)
-	}
-	if cfg.LogLevel != "debug" {
-		t.Errorf("LogLevel = %q, want debug", cfg.LogLevel)
-	}
-	if cfg.DLQTopicSuffix != ".deadletter" {
-		t.Errorf("DLQTopicSuffix = %q, want .deadletter", cfg.DLQTopicSuffix)
-	}
-	if cfg.RetryBase != 2*time.Second {
-		t.Errorf("RetryBase = %v, want 2s", cfg.RetryBase)
-	}
-	if cfg.RetryMax != time.Minute {
-		t.Errorf("RetryMax = %v, want 1m", cfg.RetryMax)
-	}
-	if cfg.LagInterval != 10*time.Second {
-		t.Errorf("LagInterval = %v, want 10s", cfg.LagInterval)
-	}
-	if cfg.ClickHouseDialTimeout != 3*time.Second {
-		t.Errorf("ClickHouseDialTimeout = %v, want 3s", cfg.ClickHouseDialTimeout)
-	}
-	if cfg.ClickHouseReadTimeout != 45*time.Second {
-		t.Errorf("ClickHouseReadTimeout = %v, want 45s", cfg.ClickHouseReadTimeout)
+	if err := e.Err(); err != nil {
+		t.Fatalf("Err = %v, want nil", err)
 	}
 }
 
-func TestLoadRejectsInvalidBatchSize(t *testing.T) {
-	_, err := config.Load(func(k string) string {
-		if k == "CDC_BATCH_SIZE" {
-			return "not-a-number"
-		}
-		return ""
-	})
+// TestErrorsAreCollected checks every bad value is reported, not just the
+// first, so one restart fixes the whole config.
+func TestErrorsAreCollected(t *testing.T) {
+	e := config.New(envOf(map[string]string{
+		"SS_INT":  "abc",
+		"SS_NEG":  "-3",
+		"SS_DUR":  "soon",
+		"SS_ZERO": "0s",
+		"SS_BOOL": "maybe",
+		"SS_PROB": "1.5",
+	}))
+	e.Int("SS_INT", 1)
+	e.Int("SS_NEG", 1)
+	e.Duration("SS_DUR", time.Second)
+	e.Duration("SS_ZERO", time.Second)
+	e.Bool("SS_BOOL", false)
+	e.Float("SS_PROB", 0)
+
+	err := e.Err()
 	if err == nil {
-		t.Fatal("Load() error = nil, want error for non-numeric CDC_BATCH_SIZE")
+		t.Fatal("Err = nil, want every malformed value reported")
 	}
-}
-
-func TestLoadRejectsNonPositiveBatchSize(t *testing.T) {
-	_, err := config.Load(func(k string) string {
-		if k == "CDC_BATCH_SIZE" {
-			return "0"
+	for _, key := range []string{"SS_INT", "SS_NEG", "SS_DUR", "SS_ZERO", "SS_BOOL", "SS_PROB"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("error %q does not mention %s", err, key)
 		}
-		return ""
-	})
-	if err == nil {
-		t.Fatal("Load() error = nil, want error for non-positive CDC_BATCH_SIZE")
-	}
-}
-
-func TestLoadRejectsInvalidFlushInterval(t *testing.T) {
-	_, err := config.Load(func(k string) string {
-		if k == "CDC_FLUSH_INTERVAL" {
-			return "soon"
-		}
-		return ""
-	})
-	if err == nil {
-		t.Fatal("Load() error = nil, want error for invalid CDC_FLUSH_INTERVAL")
 	}
 }
