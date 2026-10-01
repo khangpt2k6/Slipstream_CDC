@@ -1,61 +1,37 @@
-# Local development stack for the CDC platform.
+# Local Slipstream stack.
 #
-# Brings up Kafka (KRaft, no ZooKeeper), Postgres configured for logical
-# replication, Kafka Connect (Debezium) for capture, and ClickHouse as the
-# analytics sink.
+#   Kafka        localhost:29092   docs + identity topics
+#   Redis        localhost:6379    permission graph, dedup keys, cursors, live feed
+#   OpenSearch   localhost:9200    the search index (security plugin off: local only)
+#   Prometheus   localhost:9090
+#   Grafana      localhost:3000    anonymous admin, local only
 #
-# Host connection details (see README "Local stack"):
-#   Kafka          localhost:29092          (PLAINTEXT_HOST listener)
-#   Postgres       localhost:5432           user/pass/db = cdc / cdc / cdc
-#   Kafka Connect  http://localhost:8083    Debezium connector REST API
-#   ClickHouse     localhost:8123 / 9000    HTTP / native; user=default, no pass
-#
-# All credentials here are local-only dev defaults. Do not reuse them anywhere.
+# Every credential here is a local dev default. Do not reuse them anywhere.
 
-name: cdc-local
+name: slipstream
 
-# Shared config for the three worker instances. They form one consumer group
-# (cdc-clickhouse-sink) so Kafka spreads the 12 partitions (6 x 2 tracked topics)
-# across them and rebalances on a membership change (Issue 5.1 / Task 3). Only
-# container_name differs per instance; everything else merges from this anchor.
-x-cdc-worker: &cdc-worker
-  build:
-    context: .
-    dockerfile: Dockerfile
-  image: cdc-worker:local # shared image; build once, run 3x
+# Shared settings for Go services. Only one service (indexer1) carries the
+# build section; every other service runs the same slipstream:local image.
+x-ss: &ss
+  image: slipstream:local
+  pull_policy: never
   restart: unless-stopped
-  depends_on:
-    kafka:
-      condition: service_healthy
-    clickhouse:
-      condition: service_healthy
-    connect:
-      condition: service_healthy
-  environment:
-    CDC_KAFKA_BROKERS: kafka:9092
-    CDC_KAFKA_GROUP: cdc-clickhouse-sink
-    CDC_CLICKHOUSE_DSN: "clickhouse://default:@clickhouse:9000/cdc"
-    CDC_METRICS_ADDR: ":9100"
-  # No host port for :9100 — Prometheus scrapes each worker over the compose
-  # network by service name (Task 4). Publishing all three to the host collides.
-  healthcheck:
-    test: ["CMD-SHELL", "wget -qO- http://localhost:9100/metrics >/dev/null 2>&1 || exit 1"]
-    interval: 10s
-    timeout: 5s
-    retries: 15
-    start_period: 15s
+  environment: &ss-env
+    SS_KAFKA_BROKERS: kafka:9092
+    SS_REDIS_ADDR: redis:6379
+    SS_OPENSEARCH_URL: http://opensearch:9200
+    SS_LOG_LEVEL: info
 
 services:
   kafka:
-    image: apache/kafka:3.9.1
-    container_name: cdc-kafka
+    image: apache/kafka:4.3.1
+    container_name: ss-kafka
     ports:
-      - "29092:29092" # host access
+      - "29092:29092"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      # Internal (PLAINTEXT) for in-network clients, PLAINTEXT_HOST for the host.
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:29092
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
@@ -66,6 +42,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_HEAP_OPTS: "-Xms512m -Xmx768m"
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -75,128 +52,60 @@ services:
     volumes:
       - kafka-data:/var/lib/kafka/data
 
-  postgres:
-    image: postgres:17
-    container_name: cdc-postgres
-    command:
-      - "postgres"
-      - "-c"
-      - "wal_level=logical"
-      - "-c"
-      - "max_replication_slots=10"
-      - "-c"
-      - "max_wal_senders=10"
-      - "-c"
-      - "wal_sender_timeout=60s"
+  redis:
+    image: redis:8.8-alpine
+    container_name: ss-redis
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", ""]
     ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_USER: cdc
-      POSTGRES_PASSWORD: cdc
-      POSTGRES_DB: cdc
+      - "6379:6379"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cdc -d cdc"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 5s
-      retries: 15
-      start_period: 10s
+      timeout: 3s
+      retries: 20
     volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./deploy/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+      - redis-data:/data
 
-  # Kafka Connect running the Debezium image (bundles the Postgres connector).
-  # Internal config/offset/status topics are created by Connect via AdminClient
-  # regardless of the broker's auto-create setting; replication factor must be 1
-  # on this single-broker stack.
-  connect:
-    image: debezium/connect:2.7.3.Final
-    container_name: cdc-connect
-    depends_on:
-      kafka:
-        condition: service_healthy
-    ports:
-      - "8083:8083" # connector REST API
+  opensearch:
+    image: opensearchproject/opensearch:3.9.0
+    container_name: ss-opensearch
     environment:
-      # Debezium's image uses bare names here, not the CONNECT_ prefix.
-      BOOTSTRAP_SERVERS: kafka:9092
-      GROUP_ID: cdc-connect
-      CONFIG_STORAGE_TOPIC: connect_configs
-      OFFSET_STORAGE_TOPIC: connect_offsets
-      STATUS_STORAGE_TOPIC: connect_statuses
-      CONFIG_STORAGE_REPLICATION_FACTOR: "1"
-      OFFSET_STORAGE_REPLICATION_FACTOR: "1"
-      STATUS_STORAGE_REPLICATION_FACTOR: "1"
-      # JSON converters with schemas off keep topic payloads compact for the
-      # Go sink (Phase 1); the connector config can still override per-stream.
-      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
-      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
-      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
-      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 15
-      start_period: 40s # JVM boot + first-run internal topic creation is slow
-
-  clickhouse:
-    image: clickhouse/clickhouse-server:24.8
-    container_name: cdc-clickhouse
-    ports:
-      - "8123:8123" # HTTP
-      - "9000:9000" # native
-    environment:
-      CLICKHOUSE_DB: cdc
-      CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ""
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+      bootstrap.memory_lock: "false"
+      cluster.routing.allocation.disk.threshold_enabled: "false"
     ulimits:
       nofile:
-        soft: 262144
-        hard: 262144
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- 'http://localhost:8123/?query=SELECT%201' | grep -q 1 || exit 1"]
+      test: ["CMD-SHELL", "curl -sf 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' >/dev/null || exit 1"]
       interval: 10s
-      timeout: 5s
-      retries: 15
-      start_period: 20s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
     volumes:
-      - clickhouse-data:/var/lib/clickhouse
+      - opensearch-data:/usr/share/opensearch/data
 
-  # Prometheus scrapes the worker's /metrics. The worker runs on the HOST
-  # (`make run`), not in compose, so the scrape target is host.docker.internal;
-  # extra_hosts maps that to the host gateway on Linux too (it is built in on
-  # Docker Desktop for Mac/Windows). See deploy/prometheus/prometheus.yml.
   prometheus:
-    image: prom/prometheus:v2.54.1
-    container_name: cdc-prometheus
+    image: prom/prometheus:v3.5.0
+    container_name: ss-prometheus
     ports:
       - "9090:9090"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 15
-      start_period: 10s
 
-  # Grafana with provisioned datasources (Prometheus + ClickHouse) and
-  # dashboards — no click-ops. The ClickHouse datasource plugin is installed at
-  # boot. Local-dev only: anonymous admin, no login.
   grafana:
-    image: grafana/grafana-oss:11.2.0
-    container_name: cdc-grafana
-    depends_on:
-      clickhouse:
-        condition: service_healthy
+    image: grafana/grafana-oss:13.0.2
+    container_name: ss-grafana
     ports:
       - "3000:3000"
     environment:
-      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
@@ -205,32 +114,37 @@ services:
       - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
+
+  # Two indexer instances share both consumer groups, so partitions spread
+  # across them and a crash or rebalance is exercised all the time.
+  indexer1: &indexer
+    <<: *ss
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ss-indexer1
+    command: ["indexer"]
+    depends_on:
+      kafka: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      opensearch: { condition: service_healthy }
+    environment:
+      <<: *ss-env
+      SS_METRICS_ADDR: ":9101"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9101/healthz >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 15
-      start_period: 30s # plugin install on first boot is slow
 
-  # Three worker instances in one consumer group (Issue 5.1 / Task 3). All share
-  # the cdc-worker:local image and the &cdc-worker config above; only the
-  # container name differs. Kafka assigns disjoint partition sets across them and
-  # rebalances when one joins or leaves.
-  worker1:
-    <<: *cdc-worker
-    container_name: cdc-worker1
-
-  worker2:
-    <<: *cdc-worker
-    container_name: cdc-worker2
-
-  worker3:
-    <<: *cdc-worker
-    container_name: cdc-worker3
+  indexer2:
+    <<: *indexer
+    container_name: ss-indexer2
+    build: !reset null
 
 volumes:
   kafka-data:
-  postgres-data:
-  clickhouse-data:
+  redis-data:
+  opensearch-data:
   prometheus-data:
   grafana-data:

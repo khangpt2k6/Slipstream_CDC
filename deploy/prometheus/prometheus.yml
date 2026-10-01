@@ -1,20 +1,24 @@
-# Prometheus scrape config for the CDC stack.
-#
-# In compose the worker runs as three instances (worker1/2/3), each serving
-# /metrics on :9100 (CDC_METRICS_ADDR) and reachable by service name on the
-# compose network. For single-worker host dev (`make run`) the worker serves on
-# the host, reachable from this container as host.docker.internal:9100 (mapped to
-# the host gateway via extra_hosts in docker-compose.yml) -- add that target back
-# to the list below when running the worker on the host instead of in compose.
+# Prometheus scrape config for the Slipstream stack. Every service serves
+# /metrics on its ops port and is reached by compose service name.
 global:
   scrape_interval: 5s
   evaluation_interval: 5s
 
 scrape_configs:
-  - job_name: cdc-worker
+  - job_name: indexer
     static_configs:
-      - targets: ["worker1:9100", "worker2:9100", "worker3:9100"]
+      - targets: ["indexer1:9101", "indexer2:9101"]
 
-  - job_name: prometheus
+  - job_name: api
     static_configs:
-      - targets: ["localhost:9090"]
+      - targets: ["api:8080"]
+
+  - job_name: services
+    static_configs:
+      - targets:
+          - directory:8081
+          - slacksim:8082
+          - connector-slack:8083
+          - connector-github:8084
+          - connector-jira:8085
+          - embedder:8086

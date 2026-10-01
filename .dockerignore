@@ -1,12 +1,12 @@
-# Keep the build context lean: the image builds the binary from source, so the
-# host build artifacts, VCS metadata, logs, and local process docs are not needed.
+# Keep the build context lean.
 bin/
 dist/
+data/
 *.exe
 *.log
 .git/
 .github/
 docs/
-deploy/grafana/
-deploy/prometheus/
-*.md
+deploy/
+web/node_modules/
+web/dist/

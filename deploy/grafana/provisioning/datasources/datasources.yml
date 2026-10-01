@@ -1,27 +1,10 @@
-# Provisioned Grafana datasources (no click-ops). Both reach their targets by
-# compose service name on the shared default network.
+# Provisioned Grafana datasources (no click-ops).
 apiVersion: 1
 
 datasources:
-  # Pipeline-health metrics scraped from the worker.
   - name: Prometheus
     type: prometheus
-    uid: cdc-prometheus
+    uid: ss-prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true
-
-  # The analytics store, for the CDC current-state dashboards (Issue 3.3).
-  # Native protocol on 9000; db cdc, user default, no password (local-dev).
-  - name: ClickHouse
-    type: grafana-clickhouse-datasource
-    uid: cdc-clickhouse
-    access: proxy
-    jsonData:
-      host: clickhouse
-      port: 9000
-      protocol: native
-      username: default
-      defaultDatabase: cdc
-    secureJsonData:
-      password: ""

@@ -25,3 +25,7 @@ docs/superpowers/
 
 # Log files
 **.log
+# Local data dumps and web build output
+/data/
+web/node_modules/
+web/dist/
