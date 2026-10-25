@@ -1,5 +1,7 @@
 # Local Slipstream stack.
 #
+#   API          localhost:8080    HTTP search API + web UI
+#                localhost:9095    gRPC SearchService
 #   Kafka        localhost:29092   docs + identity topics
 #   Redis        localhost:6379    permission graph, dedup keys, cursors, live feed
 #   OpenSearch   localhost:9200    the search index (security plugin off: local only)
@@ -209,6 +211,7 @@ services:
       SS_EMBED_URL: http://tei:80
     ports:
       - "8080:8080"
+      - "9095:9095"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz >/dev/null 2>&1 || exit 1"]
       interval: 5s

@@ -1,0 +1,10 @@
+# Generate with `make proto` (needs buf, protoc-gen-go and protoc-gen-go-grpc
+# on PATH). Output is committed under internal/gen.
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: internal/gen
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: internal/gen
+    opt: paths=source_relative

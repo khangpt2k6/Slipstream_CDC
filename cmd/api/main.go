@@ -1,10 +1,12 @@
 // Command api serves search, permission explanations, the live event stream
-// and pipeline stats, plus the built web UI.
+// and pipeline stats over HTTP (plus the built web UI), and the same read
+// path as the SearchService gRPC API.
 package main
 
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/khangpt2k6/Slipstream_CDC/internal/api"
 	"github.com/khangpt2k6/Slipstream_CDC/internal/config"
 	"github.com/khangpt2k6/Slipstream_CDC/internal/embed"
+	"github.com/khangpt2k6/Slipstream_CDC/internal/grpcapi"
 	"github.com/khangpt2k6/Slipstream_CDC/internal/opensearch"
 	"github.com/khangpt2k6/Slipstream_CDC/internal/search"
 	"github.com/khangpt2k6/Slipstream_CDC/internal/svc"
@@ -25,6 +28,7 @@ func main() {
 	e := config.New(os.Getenv)
 	var (
 		addr          = e.String("SS_API_ADDR", ":8080")
+		grpcAddr      = e.String("SS_GRPC_ADDR", ":9095")
 		brokers       = e.List("SS_KAFKA_BROKERS", "localhost:29092")
 		osURL         = e.String("SS_OPENSEARCH_URL", "http://localhost:9200")
 		index         = e.String("SS_INDEX", "ss-docs")
@@ -65,8 +69,29 @@ func main() {
 		Search: searcher, OS: osc, Index: index, RDB: rdb, Kadm: adm,
 		DirectoryURL: directoryURL, WebDir: webDir, Impersonation: impersonation,
 	}
+	g := grpcapi.NewGRPC(&grpcapi.Server{Searcher: searcher, RDB: rdb, Impersonation: impersonation})
+	lis, err := net.Listen("tcp", grpcAddr)
+	if err != nil {
+		svc.Fatal("listen grpc", err)
+	}
+	go func() {
+		if err := g.Serve(lis); err != nil {
+			slog.Warn("grpc server stopped", "err", err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		stopped := make(chan struct{})
+		go func() { g.GracefulStop(); close(stopped) }()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			g.Stop() // streams (WatchEvents) do not end on their own
+		}
+	}()
+
 	mux := svc.OpsMux()
 	mux.Handle("/", srv.Handler())
-	slog.Info("api running", "addr", addr, "impersonation", impersonation, "embeddings", embedURL != "", "web", webDir)
+	slog.Info("api running", "addr", addr, "grpc", grpcAddr, "impersonation", impersonation, "embeddings", embedURL != "", "web", webDir)
 	svc.Serve(ctx, addr, mux)
 }

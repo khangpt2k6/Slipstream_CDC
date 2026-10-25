@@ -3,7 +3,7 @@
 GO       ?= go
 BIN_DIR  ?= bin
 
-.PHONY: all build test lint run tidy clean
+.PHONY: all build test lint run tidy clean proto
 
 all: build test lint
 
@@ -24,6 +24,11 @@ lint:
 ## run: run the worker against the local stack
 run:
 	$(GO) run ./cmd/worker
+
+## proto: lint the protobuf API and regenerate internal/gen
+proto:
+	buf lint
+	buf generate
 
 ## tidy: tidy and verify the module graph
 tidy:

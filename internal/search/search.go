@@ -79,6 +79,7 @@ type Request struct {
 	User        string // user id, without the u: prefix
 	Mode        Mode
 	Datasources []string
+	Kinds       []string
 	Limit       int
 }
 
@@ -154,7 +155,7 @@ func (s *Searcher) Search(ctx context.Context, req Request) (Response, error) {
 	if err != nil {
 		return Response{}, err
 	}
-	filter := Filter(exp.Principals, req.Datasources)
+	filter := Filter(exp.Principals, req.Datasources, req.Kinds)
 
 	depth := s.Candidates
 	if depth <= 0 {
@@ -213,8 +214,9 @@ func (s *Searcher) Search(ctx context.Context, req Request) (Response, error) {
 	return out, nil
 }
 
-// Filter is the permission and liveness filter every retrieval runs with.
-func Filter(principals, datasources []string) []any {
+// Filter is the permission and liveness filter every retrieval runs with,
+// plus the caller's optional datasource and kind facets.
+func Filter(principals, datasources, kinds []string) []any {
 	f := []any{
 		map[string]any{"terms": map[string]any{"allowed": principals}},
 		map[string]any{"term": map[string]any{"deleted": false}},
@@ -222,6 +224,9 @@ func Filter(principals, datasources []string) []any {
 	}
 	if len(datasources) > 0 {
 		f = append(f, map[string]any{"terms": map[string]any{"datasource": datasources}})
+	}
+	if len(kinds) > 0 {
+		f = append(f, map[string]any{"terms": map[string]any{"kind": kinds}})
 	}
 	return f
 }

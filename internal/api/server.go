@@ -97,11 +97,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	var ds []string
-	if v := q.Get("ds"); v != "" {
-		ds = strings.Split(v, ",")
-	}
-	resp, err := s.Search.Search(r.Context(), search.Request{Query: q.Get("q"), User: user, Mode: mode, Datasources: ds, Limit: limit})
+	resp, err := s.Search.Search(r.Context(), search.Request{
+		Query: q.Get("q"), User: user, Mode: mode, Limit: limit,
+		Datasources: splitList(q.Get("ds")), Kinds: splitList(q.Get("kind")),
+	})
 	if err != nil {
 		httpError(w, http.StatusBadGateway, err)
 		return
@@ -290,6 +289,13 @@ func spa(dir string) http.Handler {
 		}
 		files.ServeHTTP(w, r)
 	})
+}
+
+func splitList(v string) []string {
+	if v == "" {
+		return nil
+	}
+	return strings.Split(v, ",")
 }
 
 func httpError(w http.ResponseWriter, status int, err error) {

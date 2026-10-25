@@ -59,7 +59,7 @@ func TestFuseSingleListKeepsOrder(t *testing.T) {
 }
 
 func TestFilterAlwaysExcludesDeletedAndQuarantined(t *testing.T) {
-	b, _ := json.Marshal(Filter([]string{"u:a"}, nil))
+	b, _ := json.Marshal(Filter([]string{"u:a"}, nil, nil))
 	for _, want := range []string{`"allowed":["u:a"]`, `"deleted":false`, `"quarantined":false`} {
 		if !contains(string(b), want) {
 			t.Errorf("filter %s missing %s", b, want)

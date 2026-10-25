@@ -1,0 +1,133 @@
+syntax = "proto3";
+
+package slipstream.v1;
+
+option go_package = "github.com/khangpt2k6/Slipstream_CDC/internal/gen/slipstream/v1;slipstreamv1";
+
+// SearchService is Slipstream's read API: permission-aware search, an
+// explanation of why a user can or cannot see a document, the principals a
+// user holds, and the live pipeline feed.
+//
+// The caller is identified by the x-slipstream-user metadata key, which a
+// trusted auth proxy sets. When the server runs with dev impersonation on,
+// the as_user field overrides it.
+service SearchService {
+  // Search runs a query with the caller's permissions pushed into the engine.
+  rpc Search(SearchRequest) returns (SearchResponse);
+  // Explain reads one document in realtime and evaluates the caller's access.
+  rpc Explain(ExplainRequest) returns (ExplainResponse);
+  // Principals returns the caller's expansion at the current graph epoch.
+  rpc Principals(PrincipalsRequest) returns (PrincipalsResponse);
+  // WatchEvents streams index and permission events as they are applied.
+  rpc WatchEvents(WatchEventsRequest) returns (stream WatchEventsResponse);
+}
+
+// Mode is the retrieval strategy.
+enum Mode {
+  // Defaults to hybrid.
+  MODE_UNSPECIFIED = 0;
+  // Lexical only (BM25).
+  MODE_BM25 = 1;
+  // Vector only (k-NN over embeddings).
+  MODE_KNN = 2;
+  // BM25 and k-NN fused with reciprocal rank fusion.
+  MODE_HYBRID = 3;
+}
+
+message SearchRequest {
+  string query = 1;
+  Mode mode = 2;
+  // Restrict to these datasources (github, jira, slack). Empty means all.
+  repeated string datasources = 3;
+  // Restrict to these kinds (issue, pull_request, comment, message).
+  repeated string kinds = 4;
+  // Results to return, 1 to 50. Defaults to 10.
+  int32 limit = 5;
+  // Dev impersonation only.
+  string as_user = 6;
+}
+
+message Hit {
+  string id = 1;
+  string title = 2;
+  // HTML-escaped, with <mark> around matched terms.
+  string snippet = 3;
+  string url = 4;
+  string datasource = 5;
+  string container = 6;
+  string kind = 7;
+  string author = 8;
+  string parent_id = 9;
+  string updated_at = 10;
+  double score = 11;
+  // The principal on the document that grants the caller access.
+  string matched = 12;
+  // The chain from the caller to matched, e.g. u:alice, g:platform, c:jira:KAFKA.
+  repeated string path = 13;
+  // Source change to searchable, for documents last changed by a live event.
+  int64 freshness_ms = 14;
+  // Rank of the document in each retriever's list, before fusion.
+  map<string, int32> ranks = 15;
+}
+
+message SearchResponse {
+  repeated Hit hits = 1;
+  // The mode that actually ran (hybrid falls back to BM25 without a model).
+  Mode mode = 2;
+  double took_ms = 3;
+  // Principals the caller holds.
+  int32 principals = 4;
+  // Permission graph epoch the search was filtered at.
+  int64 epoch = 5;
+}
+
+message ExplainRequest {
+  string doc_id = 1;
+  string as_user = 2;
+}
+
+message ExplainResponse {
+  string doc_id = 1;
+  string user = 2;
+  bool visible = 3;
+  string reason = 4;
+  repeated string allowed = 5;
+  string matched = 6;
+  repeated string path = 7;
+  int32 held = 8;
+  int64 epoch = 9;
+  int64 version = 10;
+  bool deleted = 11;
+  bool quarantined = 12;
+}
+
+message PrincipalsRequest {
+  string as_user = 1;
+}
+
+message PrincipalsResponse {
+  string user = 1;
+  int64 epoch = 2;
+  repeated string principals = 3;
+}
+
+message WatchEventsRequest {
+  // Event types to receive (index, acl). Empty means all.
+  repeated string types = 1;
+}
+
+// One live feed event: a batch the index applied, or a permission edge the
+// graph applied.
+message WatchEventsResponse {
+  string type = 1;
+  int64 ts_ms = 2;
+  int32 applied = 3;
+  int32 discarded = 4;
+  int32 conflicts = 5;
+  int32 quarantined = 6;
+  repeated string sample = 7;
+  string from = 8;
+  string to = 9;
+  bool present = 10;
+  int64 latency_ms = 11;
+}
