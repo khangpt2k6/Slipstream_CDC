@@ -164,6 +164,7 @@ func (c *Client) MGet(ctx context.Context, index string, ids []string, includes 
 type BulkItem struct {
 	ID          string `json:"_id"`
 	Status      int    `json:"status"`
+	Result      string `json:"result"` // created, updated, deleted, noop
 	SeqNo       int64  `json:"_seq_no"`
 	PrimaryTerm int64  `json:"_primary_term"`
 	Error       *struct {

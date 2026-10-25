@@ -55,3 +55,20 @@ func (t *TEI) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	}
 	return out, nil
 }
+
+// Ready reports whether the server has loaded its model.
+func (t *TEI) Ready(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.base+"/health", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := t.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("embed: health: %w", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("embed: health: status %d", resp.StatusCode)
+	}
+	return nil
+}

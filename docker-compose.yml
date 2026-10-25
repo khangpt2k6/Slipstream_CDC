@@ -3,6 +3,7 @@
 #   Kafka        localhost:29092   docs + identity topics
 #   Redis        localhost:6379    permission graph, dedup keys, cursors, live feed
 #   OpenSearch   localhost:9200    the search index (security plugin off: local only)
+#   TEI          localhost:8087    embedding model server
 #   Prometheus   localhost:9090
 #   Grafana      localhost:3000    anonymous admin, local only
 #
@@ -144,6 +145,35 @@ services:
     container_name: ss-indexer2
     build: !reset null
 
+  # Embedding model server (BAAI/bge-small-en-v1.5, 384 dims, CPU). The
+  # embedder embeds documents and the api embeds queries with the same model.
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3
+    container_name: ss-tei
+    command: ["--model-id", "BAAI/bge-small-en-v1.5", "--max-client-batch-size", "128"]
+    ports:
+      - "8087:80"
+    volumes:
+      - tei-models:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:80/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  embedder:
+    <<: *ss
+    container_name: ss-embedder
+    command: ["embedder"]
+    depends_on:
+      opensearch: { condition: service_healthy }
+      tei: { condition: service_started }
+    environment:
+      <<: *ss-env
+      SS_EMBED_URL: http://tei:80
+      SS_METRICS_ADDR: ":8086"
+
   # Simulated identity provider: users, teams, grants. Source of truth for
   # permissions and the leak oracle.
   directory:
@@ -176,6 +206,7 @@ services:
     environment:
       <<: *ss-env
       SS_DIRECTORY_URL: http://directory:8081
+      SS_EMBED_URL: http://tei:80
     ports:
       - "8080:8080"
     healthcheck:
@@ -263,6 +294,7 @@ services:
       - ./data:/dump
 
 volumes:
+  tei-models:
   directory-data:
   kafka-data:
   redis-data:
