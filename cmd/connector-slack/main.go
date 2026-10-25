@@ -12,6 +12,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/khangpt2k6/Slipstream_CDC/internal/config"
+	"github.com/khangpt2k6/Slipstream_CDC/internal/connectors"
 	"github.com/khangpt2k6/Slipstream_CDC/internal/connectors/slack"
 	"github.com/khangpt2k6/Slipstream_CDC/internal/dirclient"
 	"github.com/khangpt2k6/Slipstream_CDC/internal/kafkax"
@@ -32,6 +33,7 @@ func main() {
 		secret       = e.String("SS_SLACK_SIGNING_SECRET", "local-signing-secret")
 		workspace    = e.String("SS_SLACK_WORKSPACE", "slipstream-sim")
 		reconcile    = e.Duration("SS_RECONCILE_INTERVAL", 5*time.Minute)
+		dumpDir      = e.String("SS_DUMP_DIR", "")
 		logLevel     = e.String("SS_LOG_LEVEL", "info")
 	)
 	if err := e.Err(); err != nil {
@@ -48,11 +50,16 @@ func main() {
 	defer prod.Close()
 	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
 	defer func() { _ = rdb.Close() }()
+	dump, err := connectors.OpenDump(dumpDir, "slack")
+	if err != nil {
+		svc.Fatal("open dump", err)
+	}
+	defer func() { _ = dump.Close() }()
 
 	c := &slack.Connector{
 		API:       &slack.Client{Base: apiBase, Token: token},
 		Dir:       dirclient.New(directoryURL),
-		Prod:      prod,
+		Out:       &connectors.Emitter{Prod: prod, Source: "slack", Dump: dump},
 		RDB:       rdb,
 		Secret:    secret,
 		Workspace: workspace,

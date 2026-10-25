@@ -50,6 +50,7 @@ func Mapping(dims int, refresh string) map[string]any {
 				"author":            keyword,
 				"parent_id":         keyword,
 				"labels":            keyword,
+				"duplicates":        keyword,
 				"created_at":        date,
 				"updated_at":        date,
 				"allowed":           keyword,

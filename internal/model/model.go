@@ -63,16 +63,21 @@ func Container(id string) string { return ContainerPrefix + id }
 
 // Document is the unified record for one searchable item.
 type Document struct {
-	ID         string    `json:"id"`         // e.g. github:golang/go#123, jira:KAFKA-1, slack:C01/1700000000.000100
-	Datasource string    `json:"datasource"` // github | jira | slack
-	Container  string    `json:"container"`  // e.g. github:golang/go
-	Kind       string    `json:"kind"`       // issue, pull_request, comment, ticket, message
-	Title      string    `json:"title,omitempty"`
-	Body       string    `json:"body,omitempty"`
-	URL        string    `json:"url,omitempty"`
-	Author     string    `json:"author,omitempty"`
-	ParentID   string    `json:"parent_id,omitempty"`
-	Labels     []string  `json:"labels,omitempty"`
+	ID         string   `json:"id"`         // e.g. github:golang/go#123, jira:KAFKA-1, slack:C01/1700000000.000100
+	Datasource string   `json:"datasource"` // github | jira | slack
+	Container  string   `json:"container"`  // e.g. github:golang/go
+	Kind       string   `json:"kind"`       // issue, pull_request, comment, ticket, message
+	Title      string   `json:"title,omitempty"`
+	Body       string   `json:"body,omitempty"`
+	URL        string   `json:"url,omitempty"`
+	Author     string   `json:"author,omitempty"`
+	ParentID   string   `json:"parent_id,omitempty"`
+	Labels     []string `json:"labels,omitempty"`
+	// Duplicates lists documents the source marks this one a duplicate of: a
+	// Jira "duplicates" link, or a GitHub "Duplicate of #N" comment (on a
+	// comment it speaks for the comment's thread). Search ignores it; the
+	// relevance eval uses it as ground truth.
+	Duplicates []string  `json:"duplicates,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 	// Allowed holds unexpanded principals (usually just the container). It is

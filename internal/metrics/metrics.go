@@ -128,6 +128,12 @@ var (
 		Help: "Events emitted by a connector.",
 	}, []string{"source", "mode"})
 
+	// DumpErrors counts failed appends to a connector's replay dump.
+	DumpErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ss_dump_errors_total",
+		Help: "Failed appends to a connector's replay dump.",
+	}, []string{"source"})
+
 	// DeliveriesDeduped counts webhook deliveries dropped as already seen.
 	DeliveriesDeduped = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "ss_deliveries_deduped_total",

@@ -18,8 +18,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/khangpt2k6/Slipstream_CDC/internal/connectors"
 	"github.com/khangpt2k6/Slipstream_CDC/internal/dirclient"
-	"github.com/khangpt2k6/Slipstream_CDC/internal/kafkax"
 	"github.com/khangpt2k6/Slipstream_CDC/internal/metrics"
 	"github.com/khangpt2k6/Slipstream_CDC/internal/model"
 )
@@ -28,7 +28,7 @@ import (
 type Connector struct {
 	API       *Client
 	Dir       *dirclient.Client
-	Prod      *kafkax.Producer
+	Out       *connectors.Emitter
 	RDB       *redis.Client
 	Secret    string // signing secret for the Events API
 	Workspace string // URL host prefix, e.g. "slipstream-sim"
@@ -191,11 +191,10 @@ func (c *Connector) Backfill(ctx context.Context, mode model.Mode) (int, error) 
 					newest = m.TS
 				}
 			}
-			if err := c.Prod.Docs(ctx, evs...); err != nil {
+			if err := c.Out.Emit(ctx, evs...); err != nil {
 				return err
 			}
 			total += len(evs)
-			metrics.ConnectorEvents.WithLabelValues("slack", string(mode)).Add(float64(len(evs)))
 			return nil
 		})
 		if err != nil {
@@ -326,11 +325,7 @@ func (c *Connector) membership(ctx context.Context, channel, user string, joined
 }
 
 func (c *Connector) emit(ctx context.Context, ev model.DocEvent) error {
-	if err := c.Prod.Docs(ctx, ev); err != nil {
-		return err
-	}
-	metrics.ConnectorEvents.WithLabelValues("slack", string(ev.Mode)).Inc()
-	return nil
+	return c.Out.Emit(ctx, ev)
 }
 
 // upsert maps a message to a document event. The version is the edit time
