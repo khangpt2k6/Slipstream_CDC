@@ -7,6 +7,8 @@
 #   Grafana      localhost:3000    anonymous admin, local only
 #
 # Every credential here is a local dev default. Do not reuse them anywhere.
+# Connectors append what they emit to ./data/*.jsonl (replayable dumps). On a
+# Linux host, create ./data writable by uid 10001 first.
 
 name: slipstream
 
@@ -214,8 +216,51 @@ services:
       <<: *ss-env
       SS_DIRECTORY_URL: http://directory:8081
       SS_SLACK_API_URL: http://slacksim:8082
+      SS_DUMP_DIR: /dump
     ports:
       - "8083:8083"
+    volumes:
+      - ./data:/dump
+
+  # Real GitHub. Set GITHUB_TOKEN (e.g. `export GITHUB_TOKEN=$(gh auth token)`)
+  # for 5,000 requests an hour instead of 60.
+  connector-github:
+    <<: *ss
+    container_name: ss-connector-github
+    command: ["connector-github"]
+    depends_on:
+      directory: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      <<: *ss-env
+      SS_DIRECTORY_URL: http://directory:8081
+      SS_GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      SS_GITHUB_REPOS: ${SS_GITHUB_REPOS:-golang/go}
+      SS_GITHUB_COMMENTS_SINCE: ${SS_GITHUB_COMMENTS_SINCE:-2026-01-01}
+      SS_DUMP_DIR: /dump
+    ports:
+      - "8084:8084"
+    volumes:
+      - ./data:/dump
+
+  # Real Jira: the Apache Software Foundation's public instance, read
+  # anonymously.
+  connector-jira:
+    <<: *ss
+    container_name: ss-connector-jira
+    command: ["connector-jira"]
+    depends_on:
+      directory: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      <<: *ss-env
+      SS_DIRECTORY_URL: http://directory:8081
+      SS_JIRA_PROJECTS: ${SS_JIRA_PROJECTS:-KAFKA}
+      SS_DUMP_DIR: /dump
+    ports:
+      - "8085:8085"
+    volumes:
+      - ./data:/dump
 
 volumes:
   directory-data:
