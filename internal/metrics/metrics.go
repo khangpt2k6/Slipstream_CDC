@@ -55,6 +55,12 @@ var (
 		Help: "Sink flush attempts retried after a failure.",
 	}, []string{"pipeline"})
 
+	// CommitRetries counts offset commits retried after a transient failure.
+	CommitRetries = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ss_commit_retries_total",
+		Help: "Offset commits retried after a transient Kafka error.",
+	}, []string{"pipeline"})
+
 	// DLQTotal counts records routed to a dead-letter topic.
 	DLQTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "ss_dlq_total",

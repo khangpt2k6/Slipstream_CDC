@@ -48,6 +48,10 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_HEAP_OPTS: "-Xms512m -Xmx768m"
+    # CPU weights only matter under contention. The broker's KRaft
+    # controller fences itself if it misses heartbeats for 9s, so it must
+    # never starve behind bulk embedding.
+    cpu_shares: 4096
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -85,6 +89,7 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+    cpu_shares: 2048
     ports:
       - "9200:9200"
     healthcheck:
@@ -153,6 +158,8 @@ services:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3
     container_name: ss-tei
     command: ["--model-id", "BAAI/bge-small-en-v1.5", "--max-client-batch-size", "128"]
+    # Bulk embedding takes whatever CPU is idle and yields the rest.
+    cpu_shares: 256
     ports:
       - "8087:80"
     volumes:

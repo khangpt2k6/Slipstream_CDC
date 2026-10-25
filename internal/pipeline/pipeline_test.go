@@ -3,11 +3,13 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/khangpt2k6/Slipstream_CDC/internal/consumer"
@@ -16,10 +18,13 @@ import (
 )
 
 // fakePoller yields one scripted batch per Poll, then ErrClosed so Run exits.
+// Each Commit call takes the next scripted error, if any.
 type fakePoller struct {
-	batches   [][]*kgo.Record
-	next      int
-	committed []*kgo.Record
+	batches    [][]*kgo.Record
+	next       int
+	committed  []*kgo.Record
+	commitErrs []error
+	commits    int
 }
 
 func (f *fakePoller) Poll(context.Context) ([]*kgo.Record, error) {
@@ -32,6 +37,14 @@ func (f *fakePoller) Poll(context.Context) ([]*kgo.Record, error) {
 }
 
 func (f *fakePoller) Commit(_ context.Context, recs []*kgo.Record) error {
+	f.commits++
+	if len(f.commitErrs) > 0 {
+		err := f.commitErrs[0]
+		f.commitErrs = f.commitErrs[1:]
+		if err != nil {
+			return fmt.Errorf("consumer: commit: %w", err)
+		}
+	}
 	f.committed = append(f.committed, recs...)
 	return nil
 }
@@ -258,5 +271,49 @@ func TestOnFlushSeesLandedItems(t *testing.T) {
 	}
 	if strings.Join(seen, ",") != "a,b" {
 		t.Errorf("OnFlush saw %v, want [a b]", seen)
+	}
+}
+
+// TestCommitRidesOutCoordinatorMove: a coordinator that is briefly gone is
+// waited out; the loop neither crashes nor skips the commit.
+func TestCommitRidesOutCoordinatorMove(t *testing.T) {
+	r, fp := newRunner("t-commitretry", [][]*kgo.Record{recs("a", "b")}, &fakeDLQ{}, &fakeSink{})
+	fp.commitErrs = []error{kerr.CoordinatorNotAvailable, kerr.NotCoordinator}
+
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run = %v, want nil", err)
+	}
+	if fp.commits != 3 || len(fp.committed) != 2 {
+		t.Errorf("commits = %d, committed = %d; want 3 attempts and both records", fp.commits, len(fp.committed))
+	}
+	if got := testutil.ToFloat64(metrics.CommitRetries.WithLabelValues("t-commitretry")); got != 2 {
+		t.Errorf("ss_commit_retries_total = %v, want 2", got)
+	}
+}
+
+// TestCommitAfterLostAssignmentMovesOn: once a rebalance hands the
+// partitions to another member, the stale commit is dropped (the new owner
+// replays) and consumption continues.
+func TestCommitAfterLostAssignmentMovesOn(t *testing.T) {
+	sink := &fakeSink{}
+	r, fp := newRunner("t-lost", [][]*kgo.Record{recs("a"), recs("b")}, &fakeDLQ{}, sink)
+	fp.commitErrs = []error{kerr.IllegalGeneration}
+
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run = %v, want nil", err)
+	}
+	if got := strings.Join(sink.keys(), ","); got != "a,b" {
+		t.Errorf("sink got %s, want a,b", got)
+	}
+	if len(fp.committed) != 1 || string(fp.committed[0].Value) != "b" {
+		t.Errorf("committed %v, want only b (a's commit was refused)", fp.committed)
+	}
+}
+
+func TestCommitPermanentErrorStopsLoop(t *testing.T) {
+	r, _ := newRunner("t-permanent", [][]*kgo.Record{recs("a")}, &fakeDLQ{}, &fakeSink{})
+	r.Poller.(*fakePoller).commitErrs = []error{kerr.GroupAuthorizationFailed}
+	if err := r.Run(context.Background()); !errors.Is(err, kerr.GroupAuthorizationFailed) {
+		t.Fatalf("Run = %v, want the authorization error", err)
 	}
 }

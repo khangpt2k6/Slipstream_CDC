@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/khangpt2k6/Slipstream_CDC/internal/consumer"
@@ -100,11 +101,40 @@ func (r *Runner) Run(ctx context.Context) error {
 	)
 	name := r.Name
 
+	// commit records progress for everything flushed. A coordinator that is
+	// briefly unavailable (a broker restart, a leader move) is waited out
+	// with the flush backoff rather than crashing the process. A commit
+	// rejected because this member lost the partitions in a rebalance is
+	// dropped: the batch is already in the sink, and the partitions' new
+	// owner replays from the last commit, which the idempotent sink absorbs.
 	commit := func(cctx context.Context) error {
 		if len(pending) == 0 {
 			return nil
 		}
-		if err := r.Poller.Commit(cctx, pending); err != nil {
+		var permanent error
+		err := retry.Do(cctx, r.Retry, func(attempt int, delay time.Duration, err error) {
+			metrics.CommitRetries.WithLabelValues(name).Inc()
+			slog.Warn("offset commit failed; backing off",
+				"pipeline", name, "attempt", attempt, "delay", delay.String(), "err", err)
+		}, func() error {
+			err := r.Poller.Commit(cctx, pending)
+			switch {
+			case err == nil:
+				return nil
+			case lostAssignment(err):
+				slog.Warn("commit rejected after a rebalance; the new owner replays the batch", "pipeline", name, "err", err)
+				return nil
+			case retriable(err):
+				return err
+			default:
+				permanent = err
+				return nil
+			}
+		})
+		if err == nil {
+			err = permanent
+		}
+		if err != nil {
 			return err
 		}
 		pending = pending[:0]
@@ -209,4 +239,21 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 		metrics.BufferedItems.WithLabelValues(name).Set(float64(len(buf)))
 	}
+}
+
+// retriable reports whether a commit error is worth retrying: Kafka marks
+// coordinator moves, timeouts and leader elections as retriable.
+func retriable(err error) bool {
+	var ke *kerr.Error
+	if errors.As(err, &ke) {
+		return ke.Retriable
+	}
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
+// lostAssignment reports a commit refused because the group moved on
+// without this member.
+func lostAssignment(err error) bool {
+	return errors.Is(err, kerr.IllegalGeneration) || errors.Is(err, kerr.UnknownMemberID) ||
+		errors.Is(err, kerr.RebalanceInProgress) || errors.Is(err, kerr.FencedInstanceID)
 }

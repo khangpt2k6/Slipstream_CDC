@@ -4,47 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"slices"
 	"strconv"
 	"time"
 
 	"github.com/khangpt2k6/Slipstream_CDC/internal/events"
+	"github.com/khangpt2k6/Slipstream_CDC/internal/stats"
 )
-
-// Percentiles summarizes a latency sample in milliseconds.
-type Percentiles struct {
-	N   int   `json:"n"`
-	P50 int64 `json:"p50"`
-	P95 int64 `json:"p95"`
-	P99 int64 `json:"p99"`
-	Max int64 `json:"max"`
-}
-
-// Summarize computes nearest-rank percentiles of samples.
-func Summarize(samples []int64) Percentiles {
-	if len(samples) == 0 {
-		return Percentiles{}
-	}
-	s := slices.Clone(samples)
-	slices.Sort(s)
-	at := func(q float64) int64 {
-		i := int(q*float64(len(s))+0.999999) - 1
-		return s[max(0, min(i, len(s)-1))]
-	}
-	return Percentiles{N: len(s), P50: at(0.50), P95: at(0.95), P99: at(0.99), Max: s[len(s)-1]}
-}
 
 // Stats is the admin view of the pipeline.
 type Stats struct {
-	Docs           map[string]int   `json:"docs"`
-	Total          int              `json:"total"`
-	Quarantined    int              `json:"quarantined"`
-	EmbedBacklog   int              `json:"embed_backlog"`
-	Lag            map[string]int64 `json:"lag"`
-	IndexFreshness Percentiles      `json:"index_freshness_ms"`
-	ACLPropagation Percentiles      `json:"acl_propagation_ms"`
-	Epoch          int64            `json:"epoch"`
-	TookMs         int64            `json:"took_ms"`
+	Docs           map[string]int    `json:"docs"`
+	Total          int               `json:"total"`
+	Quarantined    int               `json:"quarantined"`
+	EmbedBacklog   int               `json:"embed_backlog"`
+	Lag            map[string]int64  `json:"lag"`
+	IndexFreshness stats.Percentiles `json:"index_freshness_ms"`
+	ACLPropagation stats.Percentiles `json:"acl_propagation_ms"`
+	Epoch          int64             `json:"epoch"`
+	TookMs         int64             `json:"took_ms"`
 }
 
 var lagGroups = []string{"ss-index-docs", "ss-index-identity"}
@@ -98,8 +75,8 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	st.IndexFreshness = Summarize(s.samples(ctx, events.SamplesIndex))
-	st.ACLPropagation = Summarize(s.samples(ctx, events.SamplesACL))
+	st.IndexFreshness = stats.Summarize(s.samples(ctx, events.SamplesIndex))
+	st.ACLPropagation = stats.Summarize(s.samples(ctx, events.SamplesACL))
 	if ep, err := s.Search.X.Epoch(ctx); err == nil {
 		st.Epoch = ep
 	}

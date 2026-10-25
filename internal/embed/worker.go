@@ -33,7 +33,11 @@ type Worker struct {
 	Model       Model
 	Batch       int // texts per model call (default 32)
 	Concurrency int // model calls in flight (default 4)
-	MaxChars    int // text sent per document (default 2000; the model truncates anyway)
+	// MaxChars caps the text sent per document (default 400, about 100
+	// tokens). The title and the start of the body carry most of the signal,
+	// and a transformer's cost grows faster than linearly with length, so on
+	// a CPU this decides whether a corpus embeds in hours or days.
+	MaxChars int
 }
 
 // setVector writes a vector only if the content it was computed from is
@@ -62,7 +66,7 @@ func (w *Worker) defaults() (batch, conc, maxChars int) {
 		conc = 4
 	}
 	if maxChars <= 0 {
-		maxChars = 2000
+		maxChars = 400
 	}
 	return batch, conc, maxChars
 }

@@ -95,6 +95,29 @@ func (c *Client) Principals(ctx context.Context, user string) ([]string, error) 
 	return out, err
 }
 
+// CanSee asks the directory's ground truth whether user holds any of
+// allowed. The leak oracle checks every search hit against it.
+func (c *Client) CanSee(ctx context.Context, user string, allowed []string) (bool, error) {
+	var out struct {
+		Visible bool `json:"visible"`
+	}
+	err := c.do(ctx, http.MethodPost, "/v1/can-see", map[string]any{"user": user, "allowed": allowed}, &out)
+	return out.Visible, err
+}
+
+// Groups lists the directory's groups.
+func (c *Client) Groups(ctx context.Context) ([]Group, error) {
+	var out []Group
+	err := c.do(ctx, http.MethodGet, "/v1/groups", nil, &out)
+	return out, err
+}
+
+// Group is a team or org.
+type Group struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	var rd io.Reader
 	if body != nil {
